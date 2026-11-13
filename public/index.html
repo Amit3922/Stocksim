@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>My Stock Sim</title>
+<style>
+:root{--bg:#0e1116;--card:#171b22;--line:#262c36;--tx:#e6e9ee;--mut:#8a93a3;--up:#22c55e;--dn:#ef4444;--ac:#4f8cff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px system-ui,sans-serif}
+.wrap{max-width:1100px;margin:auto;padding:16px}
+h1{font-size:20px;margin:0 0 12px;display:flex;justify-content:space-between;align-items:center}
+.live{font-size:12px;color:var(--mut)}.live i{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--up);margin-right:6px;animation:p 2s infinite}
+@keyframes p{50%{opacity:.3}}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+.card small{color:var(--mut);display:block;margin-bottom:4px}.big{font-size:24px;font-weight:600}
+.cols{display:grid;grid-template-columns:2fr 1fr;gap:16px}@media(max-width:800px){.cols{grid-template-columns:1fr}}
+table{width:100%;border-collapse:collapse}th,td{text-align:right;padding:8px 6px;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}th{color:var(--mut);font-weight:500;font-size:12px}
+tr.row{cursor:pointer}tr.row:hover{background:#1d222b}
+.up{color:var(--up)}.dn{color:var(--dn)}.mut{color:var(--mut)}
+input,button{background:#0e1116;color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:9px 10px;font:inherit}
+button{cursor:pointer;background:var(--ac);border:0;font-weight:600}button.buy{background:var(--up);color:#04210e}button.sell{background:var(--dn)}button.ghost{background:transparent;border:1px solid var(--line);color:var(--mut)}
+.row2{display:flex;gap:8px;margin:8px 0}.row2>*{flex:1;min-width:0}
+h3{margin:0 0 10px;font-size:14px;color:var(--mut);font-weight:500}
+#sugg div{padding:6px;cursor:pointer;border-radius:6px}#sugg div:hover{background:#1d222b}
+#msg{min-height:20px;font-size:13px;margin-top:6px}svg{width:100%;height:120px;display:block}
+.x{color:var(--mut);cursor:pointer;margin-left:6px}
+</style></head><body><div class="wrap">
+<h1>📈 My Stock Sim <span class="live"><i></i><span id="upd">connecting…</span></span></h1>
+<div class="grid">
+ <div class="card"><small>Total value</small><div class="big" id="total">–</div></div>
+ <div class="card"><small>Cash</small><div class="big" id="cash">–</div></div>
+ <div class="card"><small>Total P/L</small><div class="big" id="pl">–</div></div>
+ <div class="card"><small>Starting budget</small><div class="row2" style="margin:0"><input id="bud" type="number" min="1"><button class="ghost" id="reset">Reset</button></div></div>
+</div>
+<div class="cols"><div>
+ <div class="card" style="margin-bottom:16px"><h3>Holdings</h3><table><thead><tr><th>Stock</th><th>Shares</th><th>Avg</th><th>Price</th><th>Value</th><th>P/L</th></tr></thead><tbody id="hold"></tbody></table><div class="mut" id="nohold" style="padding:8px">No positions yet — pick a stock and buy.</div></div>
+ <div class="card"><h3>Watchlist</h3><table><tbody id="watch"></tbody></table></div>
+ <div class="card" style="margin-top:16px"><h3>Trade history</h3><table><tbody id="hist"></tbody></table></div>
+</div><div>
+ <div class="card"><h3>Trade</h3>
+  <input id="q" placeholder="Search stock / ETF (e.g. Apple)" style="width:100%"><div id="sugg"></div>
+  <div style="margin-top:10px"><b id="selS">–</b> <span class="mut" id="selN"></span><div class="big" id="selP"></div><div id="selC"></div></div>
+  <svg id="chart" viewBox="0 0 300 120" preserveAspectRatio="none"></svg>
+  <div class="row2"><input id="amt" type="number" min="0" step="any" placeholder="$ amount"><input id="sh" type="number" min="0" step="any" placeholder="or shares"></div>
+  <div class="row2"><button class="buy" onclick="trade('buy')">Buy</button><button class="sell" onclick="trade('sell')">Sell</button></div>
+  <div id="msg"></div>
+ </div>
+</div></div></div>
+<script>
+let S=null,Q={},sel='AAPL';
+const $=id=>document.getElementById(id),f$=n=>(n<0?'-':'')+'$'+Math.abs(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const cls=n=>n>=0?'up':'dn',pct=n=>(n>=0?'+':'')+n.toFixed(2)+'%';
+const api=(u,b)=>fetch(u,b?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}:{}).then(r=>r.json());
+function syms(){return [...new Set([...Object.keys(S.positions),...S.watchlist,sel])]}
+async function refresh(){
+  S=S||load();
+  Q=await api('/api/quotes?symbols='+syms().join(','));
+  render();$('upd').textContent='live · updated '+new Date().toLocaleTimeString();
+}
+function render(){
+  let hv=0,cost=0,h='';
+  for(const [s,p] of Object.entries(S.positions)){
+    const q=Q[s];if(!q||q.error)continue;const v=p.shares*q.price,c=p.shares*p.avgCost;hv+=v;cost+=c;
+    h+=`<tr class="row" onclick="pick('${s}')"><td><b>${s}</b></td><td>${+p.shares.toFixed(4)}</td><td>${f$(p.avgCost)}</td><td>${f$(q.price)}</td><td>${f$(v)}</td><td class="${cls(v-c)}">${f$(v-c)}<br><small>${pct((v/c-1)*100)}</small></td></tr>`}
+  $('hold').innerHTML=h;$('nohold').style.display=h?'none':'block';
+  const total=S.cash+hv;$('total').textContent=f$(total);$('cash').textContent=f$(S.cash);
+  $('pl').innerHTML=`<span class="${cls(total-S.budget)}">${f$(total-S.budget)} <small>${pct((total/S.budget-1)*100)}</small></span>`;
+  if(document.activeElement!==$('bud'))$('bud').value=S.budget;
+  $('watch').innerHTML=S.watchlist.map(s=>{const q=Q[s];if(!q||q.error)return `<tr><td>${s}</td><td class="mut" colspan=2>${q?q.error:'…'}</td><td></td></tr>`;const d=(q.price/q.prevClose-1)*100;
+    return `<tr class="row" onclick="pick('${s}')"><td><b>${s}</b> <span class="mut">${(q.name||'').slice(0,22)}</span></td><td>${f$(q.price)}</td><td class="${cls(d)}">${pct(d)}</td><td><span class="x" onclick="event.stopPropagation();unwatch('${s}')">✕</span></td></tr>`}).join('');
+  $('hist').innerHTML=S.history.slice(0,15).map(t=>`<tr><td>${new Date(t.t).toLocaleString()}</td><td class="${t.side=='buy'?'up':'dn'}">${t.side.toUpperCase()} ${t.symbol}</td><td>${+t.shares.toFixed(4)} @ ${f$(t.price)}</td></tr>`).join('');
+  const q=Q[sel];$('selS').textContent=sel;
+  if(q&&!q.error){const d=(q.price/q.prevClose-1)*100;$('selN').textContent=q.name;$('selP').textContent=f$(q.price);$('selC').innerHTML=`<span class="${cls(d)}">${pct(d)} today</span>`;chart(q.points,d>=0)}
+  const own=S.positions[sel];$('sh').placeholder=own?`or shares (own ${+own.shares.toFixed(4)})`:'or shares';
+}
+function chart(p,up){if(p.length<2){$('chart').innerHTML='';return}
+  const mn=Math.min(...p),mx=Math.max(...p),r=mx-mn||1;
+  const pts=p.map((v,i)=>`${(i/(p.length-1))*300},${112-((v-mn)/r)*104}`).join(' ');
+  $('chart').innerHTML=`<polyline fill="none" stroke="${up?'#22c55e':'#ef4444'}" stroke-width="2" vector-effect="non-scaling-stroke" points="${pts}"/>`}
+function pick(s){sel=s;$('msg').textContent='';refresh()}
+const KEY='stocksim.v1';
+const fresh=(b=10000)=>({budget:b,cash:b,positions:{},history:[],watchlist:['AAPL','TSLA','NVDA','MSFT','SPY']});
+function load(){try{return JSON.parse(localStorage.getItem(KEY))||fresh()}catch{return fresh()}}
+function save(){localStorage.setItem(KEY,JSON.stringify(S))}
+function trade(side){
+  const q=Q[sel];if(!q||q.error){$('msg').innerHTML='<span class="dn">No price yet</span>';return}
+  let n=+$('sh').value||(+$('amt').value/q.price);n=Math.round(n*1e6)/1e6;
+  if(!(n>0)){$('msg').innerHTML='<span class="dn">Enter an amount</span>';return}
+  const cost=n*q.price,p=S.positions[sel];
+  if(side=='buy'){
+    if(cost>S.cash+1e-9){$('msg').innerHTML=`<span class="dn">Not enough cash (need ${f$(cost)})</span>`;return}
+    S.cash-=cost;S.positions[sel]=p?{shares:p.shares+n,avgCost:(p.shares*p.avgCost+cost)/(p.shares+n)}:{shares:n,avgCost:q.price};
+  }else{
+    if(!p||n>p.shares+1e-9){$('msg').innerHTML=`<span class="dn">You only own ${p?+p.shares.toFixed(4):0}</span>`;return}
+    S.cash+=cost;p.shares-=n;if(p.shares<1e-6)delete S.positions[sel];
+  }
+  S.history.unshift({t:Date.now(),symbol:sel,side,shares:n,price:q.price});save();
+  $('amt').value=$('sh').value='';$('msg').innerHTML=`<span class="up">${side=='buy'?'Bought':'Sold'} ✓</span>`;render()}
+function unwatch(s){S.watchlist=S.watchlist.filter(x=>x!==s);save();render()}
+$('reset').onclick=()=>{if(confirm('Reset portfolio and start over with this budget?')){const w=S.watchlist;S=fresh(+$('bud').value||10000);S.watchlist=w;save();refresh()}};
+let t;$('q').oninput=e=>{clearTimeout(t);t=setTimeout(async()=>{const v=e.target.value.trim();if(!v){$('sugg').innerHTML='';return}
+  const r=await api('/api/search?q='+encodeURIComponent(v));
+  $('sugg').innerHTML=(r.error?[]:r).map(x=>`<div onclick="choose('${x.symbol}')"><b>${x.symbol}</b> <span class="mut">${x.name}</span></div>`).join('')},300)};
+function choose(s){$('sugg').innerHTML='';$('q').value='';sel=s;if(!S.watchlist.includes(s)){S.watchlist.push(s);save()}refresh()}
+refresh();setInterval(refresh,15000);
+</script></body></html>
